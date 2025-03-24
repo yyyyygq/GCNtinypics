@@ -17,15 +17,22 @@ import pandas as pd
 import numpy as np
 import scipy.signal
 import matplotlib.pyplot as plt
+import cv2
 
 from scipy.ndimage import zoom
 train = pd.read_csv('fashion-mnist_train.csv')
 test = pd.read_csv('fashion-mnist_test.csv')
 
-m1 = train.iloc[9,1:785]
+m1 = train.iloc[6,1:785]
 m1 = m1.values.flatten()
 m1 =  m1.reshape((28,28))
-m1 = zoom(m1,(0.25, 0.25))
+plt.imshow(m1, cmap='hot', interpolation='nearest')
+plt.colorbar()  # Show color scale
+plt.title('Heat Map of 28x28 Matrix')
+plt.show()
+
+m1 = zoom(m1,(0.25, 0.25),order=1)
+#m1 = cv2.resize(m1, (7,7), interpolation=cv2.INTER_LINEAR)
 plt.imshow(m1, cmap='hot', interpolation='nearest')
 plt.colorbar()  # Show color scale
 plt.title('Heat Map of 28x28 Matrix')
@@ -44,7 +51,8 @@ y_test = mnist_test.iloc[:, 0].values   # Labels
 X_train = X_train / 255.0
 X_test = X_test / 255.0
 
-
+xx, yy = torch.meshgrid(torch.arange(7), torch.arange(7))
+pos = torch.stack([xx.flatten(), yy.flatten()], dim=1)
 
 
 #%% Convert to graph
@@ -55,9 +63,10 @@ def convert_to_graph(X, y):
     graphs = []
     for i in range(len(X)):
         img = X[i].reshape(28, 28)
-        img = zoom(img,(0.25, 0.25))
+        img = zoom(img,(0.25, 0.25),order=1)
         img = torch.tensor(img, dtype=torch.float).view(-1, 1)
         edge_index = grid(7, 7)
+        #edge_index = grid(28, 28)
         edge_index = edge_index[0]
         graphs.append(Data(x=img, edge_index=edge_index, y=torch.tensor([y[i]], dtype=torch.long)))
     return graphs
@@ -75,30 +84,35 @@ test_loader = DataLoader(test_graphs, batch_size=64, shuffle=False)
 
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GlobalAttention
 
 class GCN(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels1, hidden_channels2, out_channels):
         super(GCN, self).__init__()
         self.conv1 = GCNConv(in_channels, hidden_channels1)
         self.conv2 = GCNConv(hidden_channels1, hidden_channels2)
-        self.conv3 = GCNConv(hidden_channels2, out_channels)
-
+        self.conv3 = GCNConv(hidden_channels2 + in_channels, out_channels)
+        self.pool = GlobalAttention(gate_nn=torch.nn.Linear(out_channels, 1))
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
+        x0 = x
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = self.conv2(x, edge_index)
         x = F.relu(x)
+        x = torch.cat([x, x0], dim=1)  # 跳跃连接
         x = self.conv3(x, edge_index)
-        x = torch_geometric.nn.global_mean_pool(x, data.batch)
+        x = self.pool(x, data.batch)
+        #x = torch_geometric.nn.global_mean_pool(x, data.batch)
         return F.log_softmax(x, dim=1)
 
 import torch.optim as optim
 
 # Initialize model, optimizer, and loss function
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = GCN(in_channels=1, hidden_channels1=8, hidden_channels2=32, out_channels=10).to(device)
-optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-5)
+model = GCN(in_channels=1, hidden_channels1=32, hidden_channels2=16, out_channels=10).to(device)
+optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-5)                 
+
 criterion = torch.nn.CrossEntropyLoss()
 
 # Training function
@@ -130,8 +144,8 @@ import time
 # Start the timer
 start_time = time.time()
 # Training loop
-lossdata = [0 for _ in range(30)]
-for epoch in range(30):
+lossdata = [0 for _ in range(10)]
+for epoch in range(10):
     epoch_start_time = time.time()
     train_loss = train()
 #    train_acc = test(train_loader)
@@ -149,16 +163,17 @@ print(f'Test Accuracy: {100*test_acc:.4f}%')
 
 
 
+
 #%%
 import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
 
 df = {
-    'epoch': list(range(1, 31)),  # 1 到 10 的 epoch
+    'epoch': list(range(1, 11)),  # 1 到 10 的 epoch
     'loss': lossdata
 }
-lossdata = pd.DataFrame(lossdata)
+df = pd.DataFrame(df)
 # 设置 Seaborn 样式
 sns.set_theme(style="whitegrid", palette="muted", font_scale=1.2)
 
@@ -176,4 +191,7 @@ plt.tight_layout()
 
 # 显示图表
 plt.show()
+
+
+
 # %%
